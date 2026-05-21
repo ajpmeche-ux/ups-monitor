@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "py2app"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ups-monitor"
+version = "0.1.0"
+description = "macOS APC UPS power monitor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PySide6", "pyqtgraph"]
+
+[project.scripts]
+ups-monitor = "ups_monitor.main:main"

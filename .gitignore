@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+ups_metrics.csv
+*.app
+.DS_Store
