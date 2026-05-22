@@ -15,7 +15,8 @@ _WORD_LOAD_RE = re.compile(r'\bload\b', re.IGNORECASE)
 
 # Matches the IOKitDiagnostics blob line — contains thousands of ClassName=N pairs
 # that cause massive false-positive scanning. We skip it entirely.
-_IOKIT_DIAG_RE = re.compile(r'^\s*"?IOKitDiagnostics"?\s*=')
+# ioreg prefixes lines with tree chars (spaces and |) before the key name.
+_IOKIT_DIAG_RE = re.compile(r'^[|\s]*"?IOKitDiagnostics"?\s*=')
 
 METRIC_KEY_ALIASES = {
     "Voltage": "Voltage",
@@ -232,10 +233,11 @@ def _run_hid_ups_query(debug: bool = False) -> Optional[Dict[str, float]]:
         return None
 
 
-# Matches: " UPS Power:	72%; discharging; 0:44 remaining"
-# or:      " UPS Power:	100%; fully charged; (no estimate)"
+# Matches both pmset UPS output formats:
+#   new: " UPS Power:  100%; fully charged; (no estimate)"
+#   old: " -Back-UPS NS 1500M2 ...  (id=22675456)\t100%; AC attached; not charging present: true"
 _PMSET_UPS_RE = re.compile(
-    r"UPS\s+Power\s*:\s*(\d+)%\s*;\s*([^;\n]+)",
+    r"(?:UPS\s+Power\s*:|\(id=\d+\))\s+(\d+)%\s*;\s*([^;\n]+)",
     re.IGNORECASE,
 )
 
