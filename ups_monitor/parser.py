@@ -6,8 +6,46 @@ from typing import Dict, Optional
 
 METRIC_KEYS = ("Voltage", "Load")
 HEX_BLOB_RE = re.compile(r"<([0-9a-fA-F\s]+)>")
-VALUE_RE = re.compile(r'"?([A-Za-z]+)"?\s*=\s*([0-9]+(?:\.[0-9]+)?|<[^>]+>)')
+VALUE_RE = re.compile(r'"?([^\"]+)"?\s*=\s*([0-9]+(?:\.[0-9]+)?|<[^>]+>)')
 KEY_RE = re.compile(r'"?(Voltage|Load)"?')
+
+METRIC_KEY_ALIASES = {
+    "Voltage": "Voltage",
+    "Input Voltage": "Voltage",
+    "Output Voltage": "Voltage",
+    "Actual Voltage": "Voltage",
+    "Estimated Voltage": "Voltage",
+    "Measured Voltage": "Voltage",
+    "UPS Voltage": "Voltage",
+    "Load": "Load",
+    "Input Load": "Load",
+    "Output Load": "Load",
+    "Actual Load": "Load",
+    "Estimated Load": "Load",
+    "Measured Load": "Load",
+    "UPS Load": "Load",
+}
+
+ACCEPTED_PREFIXES = {"", "Input", "Output", "Actual", "Estimated", "Measured", "UPS"}
+
+
+def _metric_for_key(raw_key: str) -> Optional[str]:
+    normalized = raw_key.strip().strip('"').strip()
+    if normalized in METRIC_KEY_ALIASES:
+        return METRIC_KEY_ALIASES[normalized]
+
+    for suffix in ("Voltage", "Load"):
+        if normalized.endswith(suffix):
+            prefix = normalized[: -len(suffix)].strip()
+            if prefix in ACCEPTED_PREFIXES:
+                return suffix
+    return None
+
+
+def _line_contains_metric(line: str, key: str) -> bool:
+    prefixes = "|".join(re.escape(prefix) for prefix in ACCEPTED_PREFIXES if prefix)
+    pattern = rf'(?:(?:^|["\s])(?:{prefixes})\s+)?{re.escape(key)}(?:$|["\s])'
+    return re.search(pattern, line, re.IGNORECASE) is not None
 
 
 def _parse_value_token(value_token: str) -> Optional[float]:
@@ -18,6 +56,8 @@ def _parse_value_token(value_token: str) -> Optional[float]:
         if not match:
             return None
         hex_bytes = match.group(1).replace(" ", "")
+        if len(hex_bytes) // 2 > 4:
+            return None
         try:
             raw = bytes.fromhex(hex_bytes)
             if not raw:
@@ -37,13 +77,19 @@ def parse_ioreg_output(output: str) -> Dict[str, float]:
     metrics: Dict[str, float] = {}
 
     for match in VALUE_RE.finditer(output):
-        key = match.group(1)
-        if key not in METRIC_KEYS:
+        raw_key = match.group(1)
+        key = _metric_for_key(raw_key)
+        if key is None:
             continue
         value_text = match.group(2)
         parsed = _parse_value_token(value_text)
-        if parsed is not None:
-            metrics[key] = parsed
+        if parsed is None:
+            continue
+        if key == "Voltage" and not (85 <= parsed <= 250):
+            continue
+        if key == "Load" and not (0 <= parsed <= 100):
+            continue
+        metrics[key] = parsed
 
     if len(metrics) == len(METRIC_KEYS):
         return metrics
@@ -51,10 +97,14 @@ def parse_ioreg_output(output: str) -> Dict[str, float]:
     # fallback extraction by key and numeric token on the same line
     for line in output.splitlines():
         for key in METRIC_KEYS:
-            if key in line and key not in metrics:
+            if _line_contains_metric(line, key) and key not in metrics:
                 numbers = re.findall(r"[0-9]+(?:\.[0-9]+)?", line)
                 if numbers:
-                    metrics[key] = float(numbers[-1])
+                    value = float(numbers[-1])
+                    if key == "Voltage" and 85 <= value <= 250:
+                        metrics[key] = value
+                    elif key == "Load" and 0 <= value <= 100:
+                        metrics[key] = value
 
     # If still incomplete, try APC / Back-UPS specific heuristics
     apc_match = re.search(r"Back-UPS|American Power Conversion|idVendor\"?\s*=\s*1309|Vendor ID:\s*0x051d",
@@ -72,44 +122,44 @@ def parse_ioreg_output(output: str) -> Dict[str, float]:
         window = "\n".join(lines[start_idx : start_idx + 120])
 
         # try to extract numeric tokens and hex blobs from the device subtree
-        nums = [float(n) for n in re.findall(r"[0-9]+(?:\.[0-9]+)?", window)]
-        hex_matches = HEX_BLOB_RE.findall(window)
-        for hx in hex_matches:
+        candidates: list[float] = []
+        for line in window.splitlines():
+            if re.search(r"Voltage|Load|Power|Watts|Current|Battery|UPS", line, re.IGNORECASE):
+                candidates.extend(float(n) for n in re.findall(r"[0-9]+(?:\.[0-9]+)?", line))
+
+        for hx in HEX_BLOB_RE.findall(window):
+            hex_text = hx.replace(" ", "")
+            if len(hex_text) // 2 > 4:
+                continue
             try:
-                raw = bytes.fromhex(hx.replace(" ", ""))
+                raw = bytes.fromhex(hex_text)
                 if raw:
                     val = int.from_bytes(raw, byteorder="little", signed=False)
-                    nums.append(float(val))
+                    candidates.append(float(val))
             except ValueError:
                 pass
 
-        def choose_voltage(candidates: list[float]) -> Optional[float]:
-            if not candidates:
+        def choose_voltage(cands: list[float]) -> Optional[float]:
+            filtered = [v for v in cands if 85 <= v <= 250]
+            if not filtered:
                 return None
-            # prefer ~120 or ~230 values
             targets = (120.0, 230.0)
-            best = min(candidates, key=lambda v: min(abs(v - t) for t in targets))
-            return float(best)
+            return float(min(filtered, key=lambda v: min(abs(v - t) for t in targets)))
 
-        def choose_load(candidates: list[float]) -> Optional[float]:
-            if not candidates:
+        def choose_load(cands: list[float]) -> Optional[float]:
+            filtered = [v for v in cands if 0 <= v <= 100]
+            if not filtered:
                 return None
-            # prefer percentage-like values 0-100
-            pct = [v for v in candidates if 0 <= v <= 100]
-            if pct:
-                return float(max(pct))
-            # fallback: choose a value that looks like watts (<5000)
-            watts = [v for v in candidates if 0 <= v <= 5000]
-            if watts:
-                return float(max(watts))
-            return None
+            return float(max(filtered))
 
-        vol = choose_voltage(nums)
-        ld = choose_load(nums)
-        if vol is not None and "Voltage" not in metrics:
-            metrics["Voltage"] = vol
-        if ld is not None and "Load" not in metrics:
-            metrics["Load"] = ld
+        if "Voltage" not in metrics:
+            vol = choose_voltage(candidates)
+            if vol is not None:
+                metrics["Voltage"] = vol
+        if "Load" not in metrics:
+            ld = choose_load(candidates)
+            if ld is not None:
+                metrics["Load"] = ld
 
     return metrics
 
