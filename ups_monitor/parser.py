@@ -13,6 +13,11 @@ VALUE_RE = re.compile(r'"?([^\"]+)"?\s*=\s*(0x[0-9a-fA-F]+|<[^>]+>|[0-9]+(?:\.[0
 _WORD_VOLTAGE_RE = re.compile(r'\bvoltage\b', re.IGNORECASE)
 _WORD_LOAD_RE = re.compile(r'\bload\b', re.IGNORECASE)
 
+# Pre-filter: only lines containing these words can possibly yield a metric.
+# Running VALUE_RE over all 800KB of IOPower output is very slow; this cuts it
+# down to the handful of lines that matter before the expensive regex runs.
+_METRIC_SCAN_RE = re.compile(r'\bvoltage\b|\bload\b', re.IGNORECASE)
+
 # Matches the IOKitDiagnostics blob line — contains thousands of ClassName=N pairs
 # that cause massive false-positive scanning. We skip it entirely.
 # ioreg prefixes lines with tree chars (spaces and |) before the key name.
@@ -110,9 +115,13 @@ def parse_ioreg_output(output: str, debug: bool = False) -> Dict[str, float]:
     # Drop the IOKitDiagnostics line — it embeds thousands of ClassName=N pairs
     # that generate massive false-positive hits with no UPS relevance.
     filtered_lines = [l for l in output.splitlines() if not _IOKIT_DIAG_RE.match(l)]
-    filtered = "\n".join(filtered_lines)
 
-    for match in VALUE_RE.finditer(filtered):
+    # Only run the expensive VALUE_RE scan on lines that contain a metric keyword.
+    # _metric_for_key rejects all other keys anyway, so skipping non-metric lines
+    # is safe and cuts IOPower scan time from seconds to milliseconds.
+    candidate_lines = [l for l in filtered_lines if _METRIC_SCAN_RE.search(l)]
+
+    for match in VALUE_RE.finditer("\n".join(candidate_lines)):
         raw_key = match.group(1)
         key = _metric_for_key(raw_key)
         if key is None:
@@ -161,11 +170,11 @@ def parse_ioreg_output(output: str, debug: bool = False) -> Dict[str, float]:
                 start_idx = i
                 break
 
-        window = "\n".join(lines[start_idx : start_idx + 120])
+        window_lines = lines[start_idx : start_idx + 120]
 
         # try to extract explicit voltage/load aliases from the device subtree
         found_metrics: Dict[str, float] = {}
-        for match in VALUE_RE.finditer(window):
+        for match in VALUE_RE.finditer("\n".join(l for l in window_lines if _METRIC_SCAN_RE.search(l))):
             raw_key = match.group(1)
             key = _metric_for_key(raw_key)
             value_text = match.group(2)
@@ -181,7 +190,7 @@ def parse_ioreg_output(output: str, debug: bool = False) -> Dict[str, float]:
             found_metrics[key] = parsed
 
         if debug and not found_metrics:
-            for i, line in enumerate(window.splitlines(), start=1):
+            for i, line in enumerate(window_lines, start=1):
                 if re.search(r"Voltage|Load|Power|Watts|Current|Battery|UPS", line, re.IGNORECASE):
                     _debug_print(debug, f"[debug] subtree match line {i}: {line}")
 
