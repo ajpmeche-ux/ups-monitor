@@ -40,6 +40,68 @@ The resulting macOS bundle will be available in `dist/UPS Monitor.app`.
 pytest -q
 ```
 
+## Remote macOS installation
+
+To install this app on a remote macOS machine, use the following commands:
+
+```bash
+ssh user@remote-machine
+cd /path/where/you/want/it
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install git+https://github.com/ajpmeche-ux/ups-monitor.git
+```
+
+## Offline UI testing
+
+You can run the app without a UPS connection using demo mode:
+
+```bash
+python -m ups_monitor --demo
+```
+
+This will show the full interface, charts, and sample data even when the UPS is unavailable.
+
+## Debugging a connected UPS
+
+If macOS shows the UPS as connected but the app still says "Disconnected", run the diagnostic helper on that machine:
+
+```bash
+bash scripts/check_ups.sh
+```
+
+This will print `ioreg` and USB device data related to UPS/Power devices.
+
+If the checker shows the UPS but does not expose `Voltage` and `Load` fields, the current app parser will not detect it yet. I can then update the parser to support your device's actual property names.
+
+Or clone the repo and install locally:
+
+```bash
+ssh user@remote-machine
+cd /path/where/you/want/it
+git clone https://github.com/ajpmeche-ux/ups-monitor.git
+cd ups-monitor
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Then run the app:
+
+```bash
+source .venv/bin/activate
+python -m ups_monitor
+```
+
+If you want a one-shot install script, use `scripts/install_remote.sh`:
+
+```bash
+ssh user@remote-machine
+bash -s < <(curl -fsSL https://raw.githubusercontent.com/ajpmeche-ux/ups-monitor/main/scripts/install_remote.sh)
+```
+
 ## Publishing to GitHub
 
 To create a public repository:

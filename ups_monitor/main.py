@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import platform
 import sys
+from typing import Optional
 
 from PySide6.QtWidgets import QApplication
 
@@ -10,9 +12,13 @@ from .poller import UPSPoller
 from .ui import MainWindow
 
 
-def main() -> int:
-    if platform.system() != "Darwin":
-        print("This UPS Monitor app is designed to run on macOS.")
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="UPS Monitor for APC UPS devices on macOS")
+    parser.add_argument("--demo", action="store_true", help="Run the interface with simulated UPS metrics")
+    args = parser.parse_args(argv or sys.argv[1:])
+
+    if not args.demo and platform.system() != "Darwin":
+        print("This UPS Monitor app is designed to run on macOS unless --demo is enabled.")
         return 1
 
     app = QApplication(sys.argv)
@@ -21,7 +27,7 @@ def main() -> int:
 
     window = MainWindow()
 
-    poller = UPSPoller(poll_interval=2.0)
+    poller = UPSPoller(poll_interval=2.0, demo=args.demo)
     poller.metrics_updated.connect(window.on_metrics)
     poller.metrics_updated.connect(logger.log)
     poller.connection_changed.connect(window.set_connected)
