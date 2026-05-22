@@ -24,7 +24,7 @@ class UPSPoller(QObject):
     connection_changed = Signal(bool)
     error = Signal(str)
 
-    def __init__(self, poll_interval: float = 2.0, demo: bool = False, parent: Optional[QObject] = None):
+    def __init__(self, poll_interval: float = 2.0, demo: bool = False, debug: bool = False, parent: Optional[QObject] = None):
         super().__init__(parent)
         self.poll_interval = poll_interval
         self._base_interval = poll_interval
@@ -34,6 +34,7 @@ class UPSPoller(QObject):
         self._failure_count = 0
         self._last_error_message: Optional[str] = None
         self.demo = demo
+        self.debug = debug
         self._demo_step = 0
 
     def _next_demo_metrics(self) -> dict[str, float]:
@@ -71,7 +72,7 @@ class UPSPoller(QObject):
         while self._running:
             interval = self._base_interval
             try:
-                raw_metrics = self._next_demo_metrics() if self.demo else get_ups_metrics()
+                raw_metrics = self._next_demo_metrics() if self.demo else get_ups_metrics(debug=self.debug)
                 connected = bool(raw_metrics)
 
                 if self._last_connected is None or connected != self._last_connected:

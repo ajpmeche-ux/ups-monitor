@@ -13,6 +13,7 @@ METRIC_KEY_ALIASES = {
     "Voltage": "Voltage",
     "Input Voltage": "Voltage",
     "Output Voltage": "Voltage",
+    "Line Voltage": "Voltage",
     "Actual Voltage": "Voltage",
     "Estimated Voltage": "Voltage",
     "Measured Voltage": "Voltage",
@@ -20,13 +21,44 @@ METRIC_KEY_ALIASES = {
     "Load": "Load",
     "Input Load": "Load",
     "Output Load": "Load",
+    "Line Load": "Load",
     "Actual Load": "Load",
     "Estimated Load": "Load",
     "Measured Load": "Load",
     "UPS Load": "Load",
+    "Load Percentage": "Load",
+    "Battery Load": "Load",
 }
 
-ACCEPTED_PREFIXES = {"", "Input", "Output", "Actual", "Estimated", "Measured", "UPS"}
+ACCEPTED_PREFIXES = {"", "Input", "Output", "Line", "Actual", "Estimated", "Measured", "UPS"}
+
+
+def _debug_print(enabled: bool, *args) -> None:
+    if enabled:
+        print(*args)
+
+METRIC_KEY_ALIASES = {
+    "Voltage": "Voltage",
+    "Input Voltage": "Voltage",
+    "Output Voltage": "Voltage",
+    "Line Voltage": "Voltage",
+    "Actual Voltage": "Voltage",
+    "Estimated Voltage": "Voltage",
+    "Measured Voltage": "Voltage",
+    "UPS Voltage": "Voltage",
+    "Load": "Load",
+    "Input Load": "Load",
+    "Output Load": "Load",
+    "Line Load": "Load",
+    "Actual Load": "Load",
+    "Estimated Load": "Load",
+    "Measured Load": "Load",
+    "UPS Load": "Load",
+    "Load Percentage": "Load",
+    "Battery Load": "Load",
+}
+
+ACCEPTED_PREFIXES = {"", "Input", "Output", "Line", "Actual", "Estimated", "Measured", "UPS"}
 
 
 def _metric_for_key(raw_key: str) -> Optional[str]:
@@ -121,62 +153,52 @@ def parse_ioreg_output(output: str) -> Dict[str, float]:
 
         window = "\n".join(lines[start_idx : start_idx + 120])
 
-        # try to extract numeric tokens and hex blobs from the device subtree
-        candidates: list[float] = []
-        for line in window.splitlines():
-            if re.search(r"Voltage|Load|Power|Watts|Current|Battery|UPS", line, re.IGNORECASE):
-                candidates.extend(float(n) for n in re.findall(r"[0-9]+(?:\.[0-9]+)?", line))
-
-        for hx in HEX_BLOB_RE.findall(window):
-            hex_text = hx.replace(" ", "")
-            if len(hex_text) // 2 > 4:
+        # try to extract explicit voltage/load aliases from the device subtree
+        found_metrics: Dict[str, float] = {}
+        for match in VALUE_RE.finditer(window):
+            raw_key = match.group(1)
+            key = _metric_for_key(raw_key)
+            if key is None:
                 continue
-            try:
-                raw = bytes.fromhex(hex_text)
-                if raw:
-                    val = int.from_bytes(raw, byteorder="little", signed=False)
-                    candidates.append(float(val))
-            except ValueError:
-                pass
+            value_text = match.group(2)
+            parsed = _parse_value_token(value_text)
+            if parsed is None:
+                continue
+            if key == "Voltage" and not (85 <= parsed <= 250):
+                continue
+            if key == "Load" and not (0 <= parsed <= 100):
+                continue
+            found_metrics[key] = parsed
 
-        def choose_voltage(cands: list[float]) -> Optional[float]:
-            filtered = [v for v in cands if 85 <= v <= 250]
-            if not filtered:
-                return None
-            targets = (120.0, 230.0)
-            return float(min(filtered, key=lambda v: min(abs(v - t) for t in targets)))
-
-        def choose_load(cands: list[float]) -> Optional[float]:
-            filtered = [v for v in cands if 0 <= v <= 100]
-            if not filtered:
-                return None
-            return float(max(filtered))
-
-        if "Voltage" not in metrics:
-            vol = choose_voltage(candidates)
-            if vol is not None:
-                metrics["Voltage"] = vol
-        if "Load" not in metrics:
-            ld = choose_load(candidates)
-            if ld is not None:
-                metrics["Load"] = ld
+        for key, value in found_metrics.items():
+            if key not in metrics:
+                metrics[key] = value
 
     return metrics
 
 
-def get_ups_metrics() -> Optional[Dict[str, float]]:
+def _run_ioreg_query(plane: str, debug: bool = False) -> Optional[Dict[str, float]]:
     try:
         completed = subprocess.run(
-            ["ioreg", "-p", "IOUSB", "-l"],
+            ["ioreg", "-p", plane, "-l"],
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
         )
         output = completed.stdout or completed.stderr or ""
+        _debug_print(debug, f"[debug] ioreg plane={plane}, output length={len(output)}")
         metrics = parse_ioreg_output(output)
-        if len(metrics) == len(METRIC_KEYS):
-            return metrics
-    except (subprocess.SubprocessError, FileNotFoundError):
+        _debug_print(debug, f"[debug] parsed {metrics} from plane {plane}")
+        return metrics if len(metrics) == len(METRIC_KEYS) else None
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        _debug_print(debug, f"[debug] ioreg query failed for plane={plane}: {exc}")
         return None
+
+
+def get_ups_metrics(debug: bool = False) -> Optional[Dict[str, float]]:
+    for plane in ("IOUSB", "IOPower"):
+        metrics = _run_ioreg_query(plane, debug=debug)
+        if metrics is not None:
+            return metrics
     return None

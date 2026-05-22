@@ -15,6 +15,7 @@ from .ui import MainWindow
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="UPS Monitor for APC UPS devices on macOS")
     parser.add_argument("--demo", action="store_true", help="Run the interface with simulated UPS metrics")
+    parser.add_argument("--debug", action="store_true", help="Print debug diagnostics from ioreg polling")
     args = parser.parse_args(argv or sys.argv[1:])
 
     if not args.demo and platform.system() != "Darwin":
@@ -27,7 +28,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     window = MainWindow()
 
-    poller = UPSPoller(poll_interval=2.0, demo=args.demo)
+    poller = UPSPoller(poll_interval=2.0, demo=args.demo, debug=args.debug)
     poller.metrics_updated.connect(window.on_metrics)
     poller.metrics_updated.connect(logger.log)
     poller.connection_changed.connect(window.set_connected)
