@@ -8,7 +8,14 @@ METRIC_KEYS = ("Voltage", "Load")
 HEX_BLOB_RE = re.compile(r"<([0-9a-fA-F\s]+)>")
 HEX_LITERAL_RE = re.compile(r"0x([0-9a-fA-F]+)")
 VALUE_RE = re.compile(r'"?([^\"]+)"?\s*=\s*(0x[0-9a-fA-F]+|<[^>]+>|[0-9]+(?:\.[0-9]+)?)')
-KEY_RE = re.compile(r'"?(Voltage|Load)"?')
+
+# Word-boundary patterns prevent false matches like "Offload" → Load, "VoltageRegulator" fragments
+_WORD_VOLTAGE_RE = re.compile(r'\bvoltage\b', re.IGNORECASE)
+_WORD_LOAD_RE = re.compile(r'\bload\b', re.IGNORECASE)
+
+# Matches the IOKitDiagnostics blob line — contains thousands of ClassName=N pairs
+# that cause massive false-positive scanning. We skip it entirely.
+_IOKIT_DIAG_RE = re.compile(r'^\s*"?IOKitDiagnostics"?\s*=')
 
 METRIC_KEY_ALIASES = {
     "Voltage": "Voltage",
@@ -48,16 +55,11 @@ def _metric_for_key(raw_key: str) -> Optional[str]:
     if lower_key in (key.lower() for key in METRIC_KEY_ALIASES):
         return METRIC_KEY_ALIASES[next(key for key in METRIC_KEY_ALIASES if key.lower() == lower_key)]
 
-    if "voltage" in lower_key:
+    # Word-boundary match only: prevents "Offload", "Download", "VoltageRegulator" etc.
+    if _WORD_VOLTAGE_RE.search(normalized):
         return "Voltage"
-    if "load" in lower_key:
+    if _WORD_LOAD_RE.search(normalized):
         return "Load"
-
-    for suffix in ("Voltage", "Load"):
-        if normalized.endswith(suffix):
-            prefix = normalized[: -len(suffix)].strip()
-            if prefix in ACCEPTED_PREFIXES:
-                return suffix
     return None
 
 
@@ -101,38 +103,42 @@ def _parse_value_token(value_token: str) -> Optional[float]:
 def parse_ioreg_output(output: str, debug: bool = False) -> Dict[str, float]:
     metrics: Dict[str, float] = {}
 
-    if debug:
-        _debug_print(debug, f"[debug] scanning output for metric aliases")
+    # Drop the IOKitDiagnostics line — it embeds thousands of ClassName=N pairs
+    # that generate massive false-positive hits with no UPS relevance.
+    filtered_lines = [l for l in output.splitlines() if not _IOKIT_DIAG_RE.match(l)]
+    filtered = "\n".join(filtered_lines)
 
-    for match in VALUE_RE.finditer(output):
+    for match in VALUE_RE.finditer(filtered):
         raw_key = match.group(1)
         key = _metric_for_key(raw_key)
+        if key is None:
+            continue
         value_text = match.group(2)
         parsed = _parse_value_token(value_text)
-
-        if debug:
-            _debug_print(debug, f"[debug] candidate key={raw_key!r} -> {key!r}, value={value_text!r}, parsed={parsed}")
-
-        if key is None or parsed is None:
+        if parsed is None:
             continue
+
+        _debug_print(debug, f"[debug] hit key={raw_key!r} -> {key!r}, value={value_text!r}, parsed={parsed}")
+
         if key == "Voltage" and not (85 <= parsed <= 250):
+            _debug_print(debug, f"[debug]   skipped: voltage {parsed} out of range 85-250")
             continue
         if key == "Load" and not (0 <= parsed <= 100):
+            _debug_print(debug, f"[debug]   skipped: load {parsed} out of range 0-100")
             continue
         metrics[key] = parsed
 
     if len(metrics) == len(METRIC_KEYS):
         return metrics
 
-    # fallback extraction by key and numeric token on the same line
-    for line in output.splitlines():
+    # Fallback: scan line by line for key + nearby number
+    for line in filtered_lines:
         for key in METRIC_KEYS:
             if _line_contains_metric(line, key) and key not in metrics:
                 numbers = re.findall(r"[0-9]+(?:\.[0-9]+)?", line)
                 if numbers:
                     value = float(numbers[-1])
-                    if debug:
-                        _debug_print(debug, f"[debug] fallback candidate line={line!r}, key={key}, value={value}")
+                    _debug_print(debug, f"[debug] fallback line key={key}, value={value}, line={line!r}")
                     if key == "Voltage" and 85 <= value <= 250:
                         metrics[key] = value
                     elif key == "Load" and 0 <= value <= 100:
