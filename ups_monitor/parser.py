@@ -221,7 +221,10 @@ def _run_ioreg_query(plane: str, debug: bool = False) -> Optional[Dict[str, floa
 
 
 def _run_hid_ups_query(debug: bool = False) -> Optional[Dict[str, float]]:
-    """Search IOService IOHIDDevice entries for UPS metrics (macOS HID power device path)."""
+    """Search IOService IOHIDDevice entries for UPS metrics (macOS HID power device path).
+
+    Returns whatever metrics were found (may be partial — caller merges with pmset).
+    """
     try:
         completed = subprocess.run(
             ["ioreg", "-p", "IOService", "-c", "IOHIDDevice", "-l"],
@@ -239,7 +242,7 @@ def _run_hid_ups_query(debug: bool = False) -> Optional[Dict[str, float]]:
 
         metrics = parse_ioreg_output(output, debug=debug)
         _debug_print(debug, f"[debug] IOHIDDevice parsed: {metrics}")
-        return metrics if len(metrics) == len(METRIC_KEYS) else None
+        return metrics if metrics else None
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
         _debug_print(debug, f"[debug] IOHIDDevice query failed: {exc}")
         return None
@@ -255,10 +258,11 @@ _PMSET_UPS_RE = re.compile(
 
 
 def _parse_pmset_batt(debug: bool = False) -> Optional[Dict[str, float]]:
-    """Fall back to pmset for macOS-managed UPS.
+    """Query pmset for macOS-managed UPS AC status and battery charge.
 
-    Voltage is 120.0 V (AC nominal) when charging/charged, 0.0 V when on battery.
-    Load is battery charge percentage (the only value pmset exposes).
+    Returns:
+        "Voltage": 120.0 when on AC, 0.0 when on battery (nominal, not measured)
+        "BatteryCharge": battery charge percentage (0-100)
     """
     try:
         completed = subprocess.run(
@@ -288,7 +292,7 @@ def _parse_pmset_batt(debug: bool = False) -> Optional[Dict[str, float]]:
         )
 
         if 0.0 <= charge_pct <= 100.0:
-            return {"Voltage": voltage, "Load": charge_pct}
+            return {"Voltage": voltage, "BatteryCharge": charge_pct}
         return None
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
         _debug_print(debug, f"[debug] pmset query failed: {exc}")
@@ -301,8 +305,26 @@ def get_ups_metrics(debug: bool = False) -> Optional[Dict[str, float]]:
         if metrics is not None:
             return metrics
 
-    metrics = _run_hid_ups_query(debug=debug)
-    if metrics is not None:
-        return metrics
+    # IOHIDDevice gives actual UPS load % but usually no voltage on macOS.
+    # pmset gives AC status (voltage) and battery charge but not equipment load.
+    # Merge them: prefer HID load over pmset battery charge when both are available.
+    hid = _run_hid_ups_query(debug=debug)
+    pmset = _parse_pmset_batt(debug=debug)
 
-    return _parse_pmset_batt(debug=debug)
+    if pmset is not None:
+        merged: Dict[str, float] = {
+            "Voltage": pmset["Voltage"],
+            "Load": hid["Load"] if hid and "Load" in hid else pmset["BatteryCharge"],
+        }
+        _debug_print(
+            debug,
+            f"[debug] merged: voltage={merged['Voltage']} (pmset), "
+            f"load={merged['Load']} ({'HID' if hid and 'Load' in hid else 'pmset battery charge'})",
+        )
+        return merged
+
+    # pmset unavailable — fall back to HID-only if complete
+    if hid and len(hid) == len(METRIC_KEYS):
+        return hid
+
+    return None

@@ -36,8 +36,8 @@ _HTML_TEMPLATE = """\
 <body>
   <h2>UPS Monitor</h2>
   <p><span class="badge">{status_text}</span></p>
-  <p class="metric">Voltage: <b>{voltage}</b></p>
-  <p class="metric">Load: <b>{load}</b></p>
+  <p class="metric">AC Input: <b>{voltage}</b> <span style="color:#888;font-size:.85em">(120 V = on AC, 0 V = on battery)</span></p>
+  <p class="metric">UPS Load: <b>{load}</b> <span style="color:#888;font-size:.85em">(equipment draw as % of UPS capacity)</span></p>
   <p class="sub">Last update: {timestamp} &nbsp;|&nbsp; Auto-refreshes every 5&nbsp;s &nbsp;|&nbsp; <a href="/api/metrics">JSON API</a></p>
   <table>
     <tr><th>Timestamp</th><th>Voltage (V)</th><th>Load (%)</th></tr>
