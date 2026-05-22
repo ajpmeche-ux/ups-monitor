@@ -78,13 +78,16 @@ def _parse_value_token(value_token: str) -> Optional[float]:
         if not match:
             return None
         hex_bytes = match.group(1).replace(" ", "")
+        # Skip large blobs (hashes, UUIDs, etc.) — no UPS metric needs more than 4 bytes
+        if len(hex_bytes) > 8:
+            return None
         try:
             raw = bytes.fromhex(hex_bytes)
             if not raw:
                 return None
             parsed = int.from_bytes(raw, byteorder="little", signed=False)
             return float(parsed)
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
 
     if value_token.startswith("0x") or value_token.startswith("0X"):
