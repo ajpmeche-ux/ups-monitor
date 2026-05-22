@@ -16,11 +16,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="UPS Monitor for APC UPS devices on macOS")
     parser.add_argument("--demo", action="store_true", help="Run the interface with simulated UPS metrics")
     parser.add_argument("--debug", action="store_true", help="Print debug diagnostics from ioreg polling")
+    parser.add_argument("--headless", action="store_true", help="Run as a headless daemon with CSV logging and HTTP server (no GUI required)")
+    parser.add_argument("--port", type=int, default=8765, metavar="PORT", help="HTTP port for headless daemon (default: 8765)")
     args = parser.parse_args(argv or sys.argv[1:])
 
     if not args.demo and platform.system() != "Darwin":
         print("This UPS Monitor app is designed to run on macOS unless --demo is enabled.")
         return 1
+
+    if args.headless:
+        from .daemon import UPSDaemon
+        daemon = UPSDaemon(poll_interval=2.0, port=args.port, csv_file="ups_metrics.csv", debug=args.debug)
+        daemon.run()
+        return 0
 
     app = QApplication(sys.argv)
     logger = CSVLogger("ups_metrics.csv")

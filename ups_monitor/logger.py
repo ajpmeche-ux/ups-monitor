@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .poller import UPSMetrics
+from .models import UPSMetrics
 
 
 class CSVLogger:

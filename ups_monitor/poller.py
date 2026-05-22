@@ -3,20 +3,13 @@ from __future__ import annotations
 import math
 import time
 import platform
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 from PySide6.QtCore import QThread, QObject, Signal
 
+from .models import UPSMetrics
 from .parser import get_ups_metrics
-
-
-@dataclass(frozen=True)
-class UPSMetrics:
-    timestamp: datetime
-    voltage: float
-    load: float
 
 
 class UPSPoller(QObject):
