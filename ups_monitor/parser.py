@@ -37,29 +37,6 @@ def _debug_print(enabled: bool, *args) -> None:
     if enabled:
         print(*args)
 
-METRIC_KEY_ALIASES = {
-    "Voltage": "Voltage",
-    "Input Voltage": "Voltage",
-    "Output Voltage": "Voltage",
-    "Line Voltage": "Voltage",
-    "Actual Voltage": "Voltage",
-    "Estimated Voltage": "Voltage",
-    "Measured Voltage": "Voltage",
-    "UPS Voltage": "Voltage",
-    "Load": "Load",
-    "Input Load": "Load",
-    "Output Load": "Load",
-    "Line Load": "Load",
-    "Actual Load": "Load",
-    "Estimated Load": "Load",
-    "Measured Load": "Load",
-    "UPS Load": "Load",
-    "Load Percentage": "Load",
-    "Battery Load": "Load",
-}
-
-ACCEPTED_PREFIXES = {"", "Input", "Output", "Line", "Actual", "Estimated", "Measured", "UPS"}
-
 
 def _metric_for_key(raw_key: str) -> Optional[str]:
     normalized = raw_key.strip().strip('"').strip()
@@ -105,17 +82,22 @@ def _parse_value_token(value_token: str) -> Optional[float]:
         return None
 
 
-def parse_ioreg_output(output: str) -> Dict[str, float]:
+def parse_ioreg_output(output: str, debug: bool = False) -> Dict[str, float]:
     metrics: Dict[str, float] = {}
+
+    if debug:
+        _debug_print(debug, f"[debug] scanning output for metric aliases")
 
     for match in VALUE_RE.finditer(output):
         raw_key = match.group(1)
         key = _metric_for_key(raw_key)
-        if key is None:
-            continue
         value_text = match.group(2)
         parsed = _parse_value_token(value_text)
-        if parsed is None:
+
+        if debug:
+            _debug_print(debug, f"[debug] candidate key={raw_key!r} -> {key!r}, value={value_text!r}, parsed={parsed}")
+
+        if key is None or parsed is None:
             continue
         if key == "Voltage" and not (85 <= parsed <= 250):
             continue
@@ -133,6 +115,8 @@ def parse_ioreg_output(output: str) -> Dict[str, float]:
                 numbers = re.findall(r"[0-9]+(?:\.[0-9]+)?", line)
                 if numbers:
                     value = float(numbers[-1])
+                    if debug:
+                        _debug_print(debug, f"[debug] fallback candidate line={line!r}, key={key}, value={value}")
                     if key == "Voltage" and 85 <= value <= 250:
                         metrics[key] = value
                     elif key == "Load" and 0 <= value <= 100:
@@ -158,17 +142,22 @@ def parse_ioreg_output(output: str) -> Dict[str, float]:
         for match in VALUE_RE.finditer(window):
             raw_key = match.group(1)
             key = _metric_for_key(raw_key)
-            if key is None:
-                continue
             value_text = match.group(2)
             parsed = _parse_value_token(value_text)
-            if parsed is None:
+            if debug:
+                _debug_print(debug, f"[debug] subtree candidate key={raw_key!r} -> {key!r}, value={value_text!r}, parsed={parsed}")
+            if key is None or parsed is None:
                 continue
             if key == "Voltage" and not (85 <= parsed <= 250):
                 continue
             if key == "Load" and not (0 <= parsed <= 100):
                 continue
             found_metrics[key] = parsed
+
+        if debug and not found_metrics:
+            for i, line in enumerate(window.splitlines(), start=1):
+                if re.search(r"Voltage|Load|Power|Watts|Current|Battery|UPS", line, re.IGNORECASE):
+                    _debug_print(debug, f"[debug] subtree match line {i}: {line}")
 
         for key, value in found_metrics.items():
             if key not in metrics:
@@ -183,12 +172,12 @@ def _run_ioreg_query(plane: str, debug: bool = False) -> Optional[Dict[str, floa
             ["ioreg", "-p", plane, "-l"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=10,
             check=False,
         )
         output = completed.stdout or completed.stderr or ""
         _debug_print(debug, f"[debug] ioreg plane={plane}, output length={len(output)}")
-        metrics = parse_ioreg_output(output)
+        metrics = parse_ioreg_output(output, debug=debug)
         _debug_print(debug, f"[debug] parsed {metrics} from plane {plane}")
         return metrics if len(metrics) == len(METRIC_KEYS) else None
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
