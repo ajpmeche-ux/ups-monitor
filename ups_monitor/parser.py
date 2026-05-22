@@ -9,6 +9,10 @@ HEX_BLOB_RE = re.compile(r"<([0-9a-fA-F\s]+)>")
 HEX_LITERAL_RE = re.compile(r"0x([0-9a-fA-F]+)")
 VALUE_RE = re.compile(r'"?([^\"]+)"?\s*=\s*(0x[0-9a-fA-F]+|<[^>]+>|[0-9]+(?:\.[0-9]+)?)')
 
+# apcupsd apcaccess output fields we care about
+_APCACCESS_LINEV_RE = re.compile(r'^LINEV\s*:\s*([\d.]+)', re.MULTILINE)
+_APCACCESS_LOAD_RE = re.compile(r'^LOADPCT\s*:\s*([\d.]+)', re.MULTILINE)
+
 # Word-boundary patterns prevent false matches like "Offload" → Load, "VoltageRegulator" fragments
 _WORD_VOLTAGE_RE = re.compile(r'\bvoltage\b', re.IGNORECASE)
 _WORD_LOAD_RE = re.compile(r'\bload\b', re.IGNORECASE)
@@ -299,7 +303,55 @@ def _parse_pmset_batt(debug: bool = False) -> Optional[Dict[str, float]]:
         return None
 
 
+def _parse_apcaccess(debug: bool = False) -> Optional[Dict[str, float]]:
+    """Query apcupsd for real measured UPS metrics.
+
+    Returns actual measured input voltage (LINEV) and equipment load (LOADPCT).
+    Requires apcupsd to be installed and running — silently skipped if not available.
+    """
+    try:
+        completed = subprocess.run(
+            ["apcaccess", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        output = completed.stdout or ""
+        if not output.strip():
+            _debug_print(debug, "[debug] apcaccess: no output (apcupsd not running?)")
+            return None
+
+        _debug_print(debug, f"[debug] apcaccess output:\n{output.rstrip()}")
+
+        metrics: Dict[str, float] = {}
+
+        m = _APCACCESS_LINEV_RE.search(output)
+        if m:
+            v = float(m.group(1))
+            if 85 <= v <= 250:
+                metrics["Voltage"] = v
+                _debug_print(debug, f"[debug] apcaccess LINEV={v}")
+
+        m = _APCACCESS_LOAD_RE.search(output)
+        if m:
+            v = float(m.group(1))
+            if 0 <= v <= 100:
+                metrics["Load"] = v
+                _debug_print(debug, f"[debug] apcaccess LOADPCT={v}")
+
+        return metrics if len(metrics) == len(METRIC_KEYS) else None
+    except (subprocess.SubprocessError, FileNotFoundError):
+        _debug_print(debug, "[debug] apcaccess: not found or timed out")
+        return None
+
+
 def get_ups_metrics(debug: bool = False) -> Optional[Dict[str, float]]:
+    # apcupsd gives real measured voltage — try it first when available
+    metrics = _parse_apcaccess(debug=debug)
+    if metrics is not None:
+        return metrics
+
     for plane in ("IOUSB", "IOPower"):
         metrics = _run_ioreg_query(plane, debug=debug)
         if metrics is not None:
@@ -323,7 +375,6 @@ def get_ups_metrics(debug: bool = False) -> Optional[Dict[str, float]]:
         )
         return merged
 
-    # pmset unavailable — fall back to HID-only if complete
     if hid and len(hid) == len(METRIC_KEYS):
         return hid
 
