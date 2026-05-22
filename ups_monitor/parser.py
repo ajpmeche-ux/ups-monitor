@@ -201,9 +201,88 @@ def _run_ioreg_query(plane: str, debug: bool = False) -> Optional[Dict[str, floa
         return None
 
 
+def _run_hid_ups_query(debug: bool = False) -> Optional[Dict[str, float]]:
+    """Search IOService IOHIDDevice entries for UPS metrics (macOS HID power device path)."""
+    try:
+        completed = subprocess.run(
+            ["ioreg", "-p", "IOService", "-c", "IOHIDDevice", "-l"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        output = completed.stdout or ""
+        _debug_print(debug, f"[debug] IOHIDDevice query: {len(output)} bytes")
+
+        if not re.search(r"UPS|APC|Back-UPS|Power Conversion|051[Dd]|1309", output, re.IGNORECASE):
+            _debug_print(debug, "[debug] IOHIDDevice: no UPS/APC signature found")
+            return None
+
+        metrics = parse_ioreg_output(output, debug=debug)
+        _debug_print(debug, f"[debug] IOHIDDevice parsed: {metrics}")
+        return metrics if len(metrics) == len(METRIC_KEYS) else None
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        _debug_print(debug, f"[debug] IOHIDDevice query failed: {exc}")
+        return None
+
+
+# Matches: " UPS Power:	72%; discharging; 0:44 remaining"
+# or:      " UPS Power:	100%; fully charged; (no estimate)"
+_PMSET_UPS_RE = re.compile(
+    r"UPS\s+Power\s*:\s*(\d+)%\s*;\s*([^;\n]+)",
+    re.IGNORECASE,
+)
+
+
+def _parse_pmset_batt(debug: bool = False) -> Optional[Dict[str, float]]:
+    """Fall back to pmset for macOS-managed UPS.
+
+    Voltage is 120.0 V (AC nominal) when charging/charged, 0.0 V when on battery.
+    Load is battery charge percentage (the only value pmset exposes).
+    """
+    try:
+        completed = subprocess.run(
+            ["pmset", "-g", "batt"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        output = completed.stdout or ""
+        _debug_print(debug, f"[debug] pmset output:\n{output.rstrip()}")
+
+        match = _PMSET_UPS_RE.search(output)
+        if not match:
+            _debug_print(debug, "[debug] pmset: no 'UPS Power' line found")
+            return None
+
+        charge_pct = float(match.group(1))
+        status = match.group(2).strip().lower()
+        on_battery = "discharging" in status
+        voltage = 0.0 if on_battery else 120.0
+
+        _debug_print(
+            debug,
+            f"[debug] pmset: charge={charge_pct}%, status={status!r}, "
+            f"on_battery={on_battery}, voltage={voltage}",
+        )
+
+        if 0.0 <= charge_pct <= 100.0:
+            return {"Voltage": voltage, "Load": charge_pct}
+        return None
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        _debug_print(debug, f"[debug] pmset query failed: {exc}")
+        return None
+
+
 def get_ups_metrics(debug: bool = False) -> Optional[Dict[str, float]]:
     for plane in ("IOUSB", "IOPower"):
         metrics = _run_ioreg_query(plane, debug=debug)
         if metrics is not None:
             return metrics
-    return None
+
+    metrics = _run_hid_ups_query(debug=debug)
+    if metrics is not None:
+        return metrics
+
+    return _parse_pmset_batt(debug=debug)

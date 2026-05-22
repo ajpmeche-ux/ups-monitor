@@ -40,6 +40,14 @@ echo "--- All USB devices (name + vendor) ---"
 system_profiler SPUSBDataType 2>/dev/null | grep -E '^\s+(Product Name|Vendor Name|Manufacturer|Location ID):' | head -60 || echo "(system_profiler not available)"
 
 echo
+echo "--- pmset UPS status (macOS power management) ---"
+pmset -g batt || echo "(pmset not available)"
+
+echo
+echo "--- IOService HID devices (UPS-related) ---"
+ioreg -p IOService -c IOHIDDevice -w0 -l | grep -i -B2 -A30 'UPS|APC|Back-UPS|Power Conversion|051[Dd]|1309' || echo "(no UPS HID device found)"
+
+echo
 echo "============================================================"
 echo " If the UPS appears above but Voltage/Load fields are missing,"
 echo " copy this output and share it so the parser can be updated."
