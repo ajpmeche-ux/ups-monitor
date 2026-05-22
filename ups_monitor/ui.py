@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import collections
-from typing import Deque
+from pathlib import Path
+from typing import Deque, Optional
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
@@ -15,14 +16,18 @@ from PySide6.QtWidgets import (
     QWidget,
     QHBoxLayout,
     QFrame,
+    QPushButton,
+    QFileDialog,
 )
 
+from .logger import CSVLogger
 from .poller import UPSMetrics
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, csv_logger: Optional[CSVLogger] = None, demo_mode: bool = False) -> None:
         super().__init__()
+        self._csv_logger = csv_logger
         self.setWindowTitle("UPS Monitor")
         self.resize(1000, 640)
 
@@ -33,6 +38,20 @@ class MainWindow(QMainWindow):
         self.status_label.setFixedHeight(34)
         self.status_label.setFont(QFont("Arial", 12, QFont.Bold))
         self._update_status(False)
+
+        self.demo_label = QLabel("Demo Mode")
+        self.demo_label.setAlignment(Qt.AlignCenter)
+        self.demo_label.setFixedHeight(34)
+        self.demo_label.setFont(QFont("Arial", 11, QFont.Bold))
+        self.demo_label.setStyleSheet(
+            "background-color: #ef6c00; color: white; border-radius: 6px; padding: 4px;"
+        )
+        self.demo_label.setVisible(demo_mode)
+
+        self.export_button = QPushButton("Export CSV")
+        self.export_button.setFixedHeight(34)
+        self.export_button.clicked.connect(self._on_export_requested)
+        self.export_button.setEnabled(self._csv_logger is not None)
 
         self.voltage_label = QLabel("Voltage: -- V")
         self.voltage_label.setAlignment(Qt.AlignCenter)
@@ -52,11 +71,22 @@ class MainWindow(QMainWindow):
         self.error_label.setStyleSheet("color: #ffcc00;")
         self.error_label.setVisible(False)
 
+        self.info_label = QLabel("")
+        self.info_label.setAlignment(Qt.AlignCenter)
+        self.info_label.setFont(QFont("Arial", 10))
+        self.info_label.setStyleSheet("color: #4caf50;")
+        self.info_label.setVisible(False)
+
         header_layout = QHBoxLayout()
         header_layout.addWidget(self.status_label)
-        header_layout.addWidget(self.voltage_label)
-        header_layout.addWidget(self.load_label)
-        header_layout.addWidget(self.last_updated_label)
+        header_layout.addWidget(self.demo_label)
+        header_layout.addStretch()
+        header_layout.addWidget(self.export_button)
+
+        metric_layout = QHBoxLayout()
+        metric_layout.addWidget(self.voltage_label)
+        metric_layout.addWidget(self.load_label)
+        metric_layout.addWidget(self.last_updated_label)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Timestamp", "Voltage (V)", "Load (%)"])
@@ -86,6 +116,8 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout()
         layout.addLayout(header_layout)
+        layout.addLayout(metric_layout)
+        layout.addWidget(self.info_label)
         layout.addWidget(self.error_label)
         layout.addWidget(self.table)
         layout.addWidget(self.voltage_chart)
@@ -119,8 +151,38 @@ class MainWindow(QMainWindow):
         self._update_status(connected)
 
     def set_error_message(self, message: str) -> None:
+        self.info_label.setVisible(False)
         self.error_label.setText(message)
         self.error_label.setVisible(bool(message))
+
+    def set_info_message(self, message: str) -> None:
+        self.error_label.setVisible(False)
+        self.info_label.setText(message)
+        self.info_label.setVisible(bool(message))
+
+    def set_demo_mode(self, demo_mode: bool) -> None:
+        self.demo_label.setVisible(demo_mode)
+
+    def _on_export_requested(self) -> None:
+        if self._csv_logger is None:
+            return
+
+        default_name = "ups_metrics_export.csv"
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export UPS history",
+            default_name,
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not destination:
+            return
+
+        try:
+            self._csv_logger.export_to(destination)
+            self.set_info_message(f"Exported UPS history to {Path(destination).name}")
+            self.statusBar().showMessage(f"Exported UPS history to {Path(destination).name}", 5000)
+        except Exception as exc:
+            self.set_error_message(f"Export failed: {exc}")
 
     def _refresh_table(self) -> None:
         self.table.setRowCount(len(self._samples))

@@ -23,6 +23,16 @@ def test_parse_ioreg_output_hex_blob():
     assert metrics["Load"] == 35.0
 
 
+def test_parse_ioreg_output_hex_literal_values():
+    sample = '''
+        "Voltage" = 0x78
+        "Load" = 0x23
+    '''
+    metrics = parse_ioreg_output(sample)
+    assert metrics["Voltage"] == 120.0
+    assert metrics["Load"] == 35.0
+
+
 def test_parse_ioreg_output_missing_values():
     sample = '"Voltage" = 120'
     metrics = parse_ioreg_output(sample)
@@ -40,3 +50,15 @@ def test_parse_ioreg_output_load_range_filtering():
     metrics = parse_ioreg_output(sample)
     assert metrics["Load"] == 42.0
     assert metrics["Load"] <= 100.0
+
+
+def test_parse_ioreg_output_ignores_generic_usb_fields():
+    sample = '''
+        "USB Product Name" = "Back-UPS NS 1500M2"
+        "Vendor ID" = 0x051d
+        "Bus Power Available" = 250
+        "sessionID" = 1848409457
+    '''
+    metrics = parse_ioreg_output(sample)
+    assert "Voltage" not in metrics
+    assert "Load" not in metrics

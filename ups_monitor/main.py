@@ -26,7 +26,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     logger = CSVLogger("ups_metrics.csv")
     logger.start()
 
-    window = MainWindow()
+    window = MainWindow(csv_logger=logger, demo_mode=args.demo)
 
     poller = UPSPoller(poll_interval=2.0, demo=args.demo, debug=args.debug)
     poller.metrics_updated.connect(window.on_metrics)

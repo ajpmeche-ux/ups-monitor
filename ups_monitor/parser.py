@@ -6,7 +6,8 @@ from typing import Dict, Optional
 
 METRIC_KEYS = ("Voltage", "Load")
 HEX_BLOB_RE = re.compile(r"<([0-9a-fA-F\s]+)>")
-VALUE_RE = re.compile(r'"?([^\"]+)"?\s*=\s*([0-9]+(?:\.[0-9]+)?|<[^>]+>)')
+HEX_LITERAL_RE = re.compile(r"0x([0-9a-fA-F]+)")
+VALUE_RE = re.compile(r'"?([^\"]+)"?\s*=\s*(0x[0-9a-fA-F]+|<[^>]+>|[0-9]+(?:\.[0-9]+)?)')
 KEY_RE = re.compile(r'"?(Voltage|Load)"?')
 
 METRIC_KEY_ALIASES = {
@@ -40,8 +41,17 @@ def _debug_print(enabled: bool, *args) -> None:
 
 def _metric_for_key(raw_key: str) -> Optional[str]:
     normalized = raw_key.strip().strip('"').strip()
+    lower_key = normalized.lower()
+
     if normalized in METRIC_KEY_ALIASES:
         return METRIC_KEY_ALIASES[normalized]
+    if lower_key in (key.lower() for key in METRIC_KEY_ALIASES):
+        return METRIC_KEY_ALIASES[next(key for key in METRIC_KEY_ALIASES if key.lower() == lower_key)]
+
+    if "voltage" in lower_key:
+        return "Voltage"
+    if "load" in lower_key:
+        return "Load"
 
     for suffix in ("Voltage", "Load"):
         if normalized.endswith(suffix):
@@ -65,8 +75,6 @@ def _parse_value_token(value_token: str) -> Optional[float]:
         if not match:
             return None
         hex_bytes = match.group(1).replace(" ", "")
-        if len(hex_bytes) // 2 > 4:
-            return None
         try:
             raw = bytes.fromhex(hex_bytes)
             if not raw:
@@ -75,6 +83,14 @@ def _parse_value_token(value_token: str) -> Optional[float]:
             return float(parsed)
         except ValueError:
             return None
+
+    if value_token.startswith("0x") or value_token.startswith("0X"):
+        match = HEX_LITERAL_RE.match(value_token)
+        if match:
+            try:
+                return float(int(match.group(1), 16))
+            except ValueError:
+                return None
 
     try:
         return float(value_token)
